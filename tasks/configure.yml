@@ -137,13 +137,13 @@
   become_user: "{{ postgresql_service_user }}"
   when: postgresql_configuration_pt1.changed or postgresql_configuration_pt2.changed or postgresql_configuration_pt3.changed or postgresql_systemd_custom_conf.changed
 
-- name: PostgreSQL | Check if PostgreSQL is managed by systemd
+- name: PostgreSQL | Try to restart with pg_ctlcluster
   shell: 
-    cmd: systemctl status postgresql@{{ postgresql_version }}-{{ postgresql_cluster_name }} > /dev/null 2>&1
+    cmd: pg_ctlcluster {{ postgresql_version }} {{ postgresql_cluster_name }} restart
     executable: /bin/bash
-  register: postgresql_systemd_check
+  become_user: "{{ postgresql_service_user }}"
+  register: postgresql_restart_attempt
   failed_when: false
-  changed_when: false
   when: postgresql_configuration_pt2.changed
 
 - name: PostgreSQL | Restart service using systemd
@@ -153,15 +153,14 @@
   become: true
   when: 
     - postgresql_configuration_pt2.changed
-    - postgresql_systemd_check.rc == 0
+    - postgresql_restart_attempt.rc == 1
+    - "'cluster is running from systemd' in postgresql_restart_attempt.stderr"
 
-- name: PostgreSQL | Restart service using pg_ctlcluster
-  shell: 
-    cmd: pg_ctlcluster {{ postgresql_version }} {{ postgresql_cluster_name }} restart
-    executable: /bin/bash
-  become_user: "{{ postgresql_service_user }}"
-  when: 
+- name: PostgreSQL | Check if restart was successful
+  fail:
+    msg: "Failed to restart PostgreSQL: {{ postgresql_restart_attempt.stderr }}"
+  when:
     - postgresql_configuration_pt2.changed
-    - postgresql_systemd_check.rc != 0
-  register: postgresql_restart
-  failed_when: postgresql_restart.rc not in [0, 2] # handle already-running return codes
+    - postgresql_restart_attempt.rc != 0
+    - postgresql_restart_attempt.rc != 2  # handle already-running return codes
+    - "'cluster is running from systemd' not in postgresql_restart_attempt.stderr"
